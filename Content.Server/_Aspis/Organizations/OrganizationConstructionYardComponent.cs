@@ -1,4 +1,5 @@
 using System;
+using Robust.Shared.GameObjects;
 
 namespace Content.Server._Aspis.Organizations;
 
@@ -9,22 +10,14 @@ namespace Content.Server._Aspis.Organizations;
 [RegisterComponent]
 public sealed partial class OrganizationConstructionYardComponent : Component
 {
-    [DataField]
     public Guid OrganizationId;
-
-    [DataField]
     public Guid AssignmentId;
-
-    [DataField]
     public string QuotaCode = string.Empty;
 
     /// <summary>
     /// A yard platform is not the ship being assembled or repaired.
     /// Contract settlement must verify the actual target grid separately.
     /// </summary>
-    [DataField]
     public bool IsWorkPlatform;
-
-    [DataField]
     public EntityUid ContractGrid = EntityUid.Invalid;
 }
