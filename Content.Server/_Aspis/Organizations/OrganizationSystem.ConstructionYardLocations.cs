@@ -18,7 +18,6 @@ namespace Content.Server._Aspis.Organizations;
 /// </summary>
 public sealed partial class OrganizationSystem
 {
-    private const int MaxConstructionYardsPerRound = 2;
     private const float ConstructionYardFirstRing = 900f;
     private const float ConstructionYardRingStep = 350f;
     private const int ConstructionYardRingCount = 9;
