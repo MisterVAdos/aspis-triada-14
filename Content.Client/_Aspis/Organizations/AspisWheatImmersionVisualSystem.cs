@@ -40,21 +40,7 @@ public sealed class AspisWheatImmersionVisualSystem : EntitySystem
             return;
         _elapsed = 0f;
         _current.Clear();
-        // The wheat tile is provided by the planet resources, which may not be
-        // installed in minimal/test content packs. Never crash the client on
-        // ordinary maps when that optional tile is absent.
-        if (!_tiles.TryGetDefinition("FloorAspisWheat", out var wheatTile))
-        {
-            foreach (var uid in new List<EntityUid>(_faded))
-            {
-                if (TryComp<SpriteComponent>(uid, out var sprite))
-                    Restore(uid, sprite);
-                else
-                    _faded.Remove(uid);
-            }
-            return;
-        }
-        var wheatId = wheatTile.TileId;
+        var wheatId = _tiles["FloorAspisWheat"].TileId;
         var query = EntityQueryEnumerator<HumanoidAppearanceComponent, SpriteComponent, TransformComponent>();
         while (query.MoveNext(out var uid, out _, out var sprite, out var xform))
         {
@@ -83,17 +69,10 @@ public sealed class AspisWheatImmersionVisualSystem : EntitySystem
                 Restore(uid, sprite);
                 continue;
             }
-            // The immersion shader is optional in minimal test resources.
-            // If unavailable, leave the original sprite untouched.
-            if (!_proto.TryIndex<ShaderPrototype>("AspisWheatLowerFade", out var shaderPrototype))
-            {
-                Restore(uid, sprite);
-                continue;
-            }
             _current.Add(uid);
             if (_faded.Add(uid))
             {
-                var shader = shaderPrototype.Instance();
+                var shader = _proto.Index<ShaderPrototype>("AspisWheatLowerFade").Instance();
                 _sprites.SetPostShader((uid, sprite),
                     new SpriteComponent.PostShaderArgs(ShaderId, shader));
             }

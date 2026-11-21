@@ -8,3 +8,4 @@
     sprite: _Aspis/Effects/planetary_chute.rsi
     state: balloon
     drawdepth: OverMobs
+    scale: 1.7, 1.7
