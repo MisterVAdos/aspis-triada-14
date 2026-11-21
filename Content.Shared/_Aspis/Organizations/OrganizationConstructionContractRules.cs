@@ -3,9 +3,8 @@ using System;
 namespace Content.Shared._Aspis.Organizations;
 
 /// <summary>
-/// Server/client-neutral contract categories for Q2.2. A construction contract
-/// is not an IndustrialExport cargo order. These rules do not unlock or pay
-/// a contract without the server's physical ship-inspection proof.
+/// Stable contract categories. A shipyard contract must not be handled as an
+/// IndustrialExport cargo sale. These are balance PROPOSALS, not live rewards.
 /// </summary>
 public enum OrganizationConstructionContractKind : byte
 {
@@ -17,20 +16,19 @@ public enum OrganizationConstructionContractKind : byte
 
 public static class OrganizationConstructionContractRules
 {
-    public const int MaximumYardsPerRound = 2;
+    public const int MaximumYardsPerRound = 8; // Live platforms; completed contracts reuse their existing post.
 
     public static OrganizationConstructionContractKind KindForSlot(int slot) =>
         (OrganizationConstructionContractKind)Math.Clamp(slot, 0, 3);
 
     public static string Title(int slot) => KindForSlot(slot) switch
     {
-        OrganizationConstructionContractKind.MinorHullRepair => "Поточний ремонт шатла",
-        OrganizationConstructionContractKind.CompartmentReconstruction => "Реконструкція відсіків",
-        OrganizationConstructionContractKind.CapitalShipRepair => "Капітальне відновлення корабля",
-        _ => "Суднобудівний контракт"
+        OrganizationConstructionContractKind.MinorHullRepair => "Ремонт службового катера",
+        OrganizationConstructionContractKind.CompartmentReconstruction => "Реконструкція транспортного шатла",
+        OrganizationConstructionContractKind.CapitalShipRepair => "Капітальний ремонт спеціалізованого корабля",
+        _ => "Будівництво великого корабля"
     };
 
-    // These are contract deadlines, not artificial build timers.
     public static int DeadlineMinutes(int slot) => KindForSlot(slot) switch
     {
         OrganizationConstructionContractKind.MinorHullRepair => 60,
@@ -39,13 +37,25 @@ public static class OrganizationConstructionContractRules
         _ => 240
     };
 
-    // 100 basis points = 1 percentage point of sector influence.
-    // These are proposed balancing coefficients, NOT live grant logic.
-    public static int ProposedSectorInfluenceBasisPoints(int slot) => KindForSlot(slot) switch
+    // One hull job per contract. High-grade jobs replace much more of the hull
+    // and are deliberately more valuable than an ordinary cargo export.
+    // Consumed by the existing market-demand and daily-revenue cap, not a free grant.
+    public static int RewardEffortPercent(int slot) => KindForSlot(slot) switch
     {
-        OrganizationConstructionContractKind.MinorHullRepair => 8,
-        OrganizationConstructionContractKind.CompartmentReconstruction => 25,
-        OrganizationConstructionContractKind.CapitalShipRepair => 100,
-        _ => 150
+        OrganizationConstructionContractKind.MinorHullRepair => 550,
+        OrganizationConstructionContractKind.CompartmentReconstruction => 1100,
+        OrganizationConstructionContractKind.CapitalShipRepair => 2200,
+        _ => 4500
     };
+
+    // 100 basis points = 1 percentage point; subject to sector market capacity.
+    public const int MaximumSectorInfluenceBasisPointsPerContract = 110;
+    public static int ProposedSectorInfluenceBasisPoints(int slot) =>
+        KindForSlot(slot) switch
+        {
+            OrganizationConstructionContractKind.MinorHullRepair => 8,
+            OrganizationConstructionContractKind.CompartmentReconstruction => 20,
+            OrganizationConstructionContractKind.CapitalShipRepair => 60,
+            _ => 110
+        };
 }
