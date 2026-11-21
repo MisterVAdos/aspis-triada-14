@@ -542,11 +542,12 @@ namespace Content.Server.Cargo.Systems
         /// Nothing is dispatched until an ordinary cargo worker approves it.
         /// </summary>
         public bool TryQueueOrganizationQuotaCrates(EntityUid console, Guid organization, string code, string requester,
-            int totalUnits, int alreadyRequested, int[] postTargets, out int queued)
+            int totalUnits, int alreadyRequested, int[] postTargets, out int queued, bool isFrontierShipment = false)
         {
             queued = 0;
             if (organization == Guid.Empty || code.Length is < 6 or > 48 ||
-                requester.Length is < 1 or > 100 || totalUnits is < 1 or > 40 ||
+                requester.Length is < 1 or > 100 || totalUnits < 1 ||
+                totalUnits > (isFrontierShipment ? 80 : 40) ||
                 alreadyRequested < 0 || alreadyRequested >= totalUnits ||
                 !TryComp<CargoOrderConsoleComponent>(console, out var control) ||
                 !TryGetOrderDatabase(console, out var station, out var database, control) ||

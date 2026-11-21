@@ -87,12 +87,9 @@ public sealed partial class NavScreen
         if (_aspisLand != null) _aspisLand.Disabled = !isPlanet || surface;
         if (_aspisTakeOff != null) _aspisTakeOff.Disabled = !isPlanet || !surface;
 
-        var mode = !isPlanet ? "КОСМОС" : surface ? "ПОВЕРХНЯ" : "АТМОСФЕРА";
         var speed = body.LinearVelocity.Length();
         var condition = !isPlanet ? "НАВІГАЦІЯ" : surface ? "ПОСАДКА" :
             speed >= 20f ? "ШВИДКІСТЬ НОРМАЛЬНА" : "ЗАГРОЗА ЗРИВУ <20";
-        if (AspisFlightMode.Text != mode) AspisFlightMode.Text = mode;
-        if (AspisFlightCondition.Text != condition) AspisFlightCondition.Text = condition;
         if (_aspisFlightVelocity != null)
         {
             var status = $"ШВИДКІСТЬ · {speed:0.0} м/с";
