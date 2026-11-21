@@ -1,6 +1,12 @@
 import axios from 'axios';
 import { titleCase } from 'title-case';
 
+// Preserve non-Latin, human-written titles instead of forcing English casing.
+if (/[^\x00-\x7F]/.test(process.env.PR_TITLE || '')) {
+    console.log('Non-Latin PR title; leaving it unchanged.');
+    process.exit(0);
+}
+
 if (process.env.GITHUB_TOKEN) axios.defaults.headers.common['Authorization'] = `token ${process.env.GITHUB_TOKEN}`;
 else throw new Error('BOT_TOKEN was not provided in repository secrets or GITHUB_TOKEN was not set correctly.');
 
