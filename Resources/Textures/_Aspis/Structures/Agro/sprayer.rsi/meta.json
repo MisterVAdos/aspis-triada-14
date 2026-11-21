@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "license": "Custom",
-  "copyright": "Based on the supplied herbicide source sprite; temporary visual fallback.",
+  "license": "CC-BY-SA-3.0",
+  "copyright": "Temporary reused artwork from the user-supplied Aspis herbicide_source.rsi (CC-BY-SA-3.0).",
   "size": {
     "x": 32,
     "y": 32
