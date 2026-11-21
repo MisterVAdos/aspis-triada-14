@@ -4,8 +4,8 @@
     "x": 32,
     "y": 32
   },
-  "license": "User-provided",
-  "copyright": "User-supplied storm.png; green recolor only; original atlas preserved",
+  "license": "CC-BY-SA-3.0",
+  "copyright": "Green recolor of weather.rsi/storm.png, original source https://github.com/Citadel-Station-13/Citadel-Station-13-RP/tree/5781addfa1193c2811408f64d15176139395d670 (CC-BY-SA-3.0); recolor for Aspis",
   "states": [
     {
       "name": "rain",
