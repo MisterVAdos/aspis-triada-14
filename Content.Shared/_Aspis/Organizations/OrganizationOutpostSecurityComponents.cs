@@ -19,7 +19,7 @@ public enum OrganizationOutpostAccessTier : byte
 [RegisterComponent, NetworkedComponent]
 public sealed partial class OrganizationOutpostDoorComponent : Component
 {
-    [DataField] public Guid Organization;
+    public Guid Organization;
     [DataField] public OrganizationOutpostAccessTier RequiredTier = OrganizationOutpostAccessTier.Member;
 }
 
@@ -27,7 +27,7 @@ public sealed partial class OrganizationOutpostDoorComponent : Component
 [RegisterComponent, NetworkedComponent]
 public sealed partial class OrganizationOutpostConfiguratorComponent : Component
 {
-    [DataField] public Guid Organization;
+    public Guid Organization;
     // Legacy tier retained for existing printed devices and saved maps.
     [DataField] public OrganizationOutpostAccessTier SelectedTier = OrganizationOutpostAccessTier.Member;
     [DataField] public bool AdvancedUi;
@@ -41,7 +41,7 @@ public sealed partial class OrganizationOutpostConfiguratorComponent : Component
 [RegisterComponent, NetworkedComponent]
 public sealed partial class OrganizationOutpostSpawnBeaconComponent : Component
 {
-    [DataField] public Guid Organization;
+    public Guid Organization;
     [DataField] public OrganizationOutpostAccessTier Tier;
     // Round-local verification only. Never trust a saved true from a player ship file.
     public bool Validated;

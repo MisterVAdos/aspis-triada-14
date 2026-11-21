@@ -11,7 +11,7 @@ namespace Content.Shared._Aspis.Organizations;
 [RegisterComponent, NetworkedComponent]
 public sealed partial class OrganizationPropertyAccessReaderComponent : Component
 {
-    [DataField] public Guid Organization;
+    public Guid Organization;
     [DataField] public int RequiredSlot = 1;
 }
 
@@ -22,7 +22,7 @@ public sealed partial class OrganizationPropertyAccessReaderComponent : Componen
 [RegisterComponent, NetworkedComponent]
 public sealed partial class OrganizationAccessCardComponent : Component
 {
-    [DataField] public Guid Organization;
+    public Guid Organization;
     [DataField] public int AccessMask;
     [DataField] public int PrimarySlot = 1;
     [DataField] public string IssuedForRole = string.Empty;
