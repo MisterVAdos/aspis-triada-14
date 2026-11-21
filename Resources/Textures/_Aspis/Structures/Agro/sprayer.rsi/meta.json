@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "license": "Custom",
+  "copyright": "Based on the supplied herbicide source sprite; temporary visual fallback.",
+  "size": {
+    "x": 32,
+    "y": 32
+  },
+  "states": [
+    {
+      "name": "empty"
+    },
+    {
+      "name": "full"
+    }
+  ]
+}
