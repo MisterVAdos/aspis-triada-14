@@ -12,6 +12,10 @@ concurrency:
 jobs:
   diff:
     name: Diff
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
