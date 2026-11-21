@@ -83,10 +83,17 @@ public sealed class AspisWheatImmersionVisualSystem : EntitySystem
                 Restore(uid, sprite);
                 continue;
             }
+            // The immersion shader is optional in minimal test resources.
+            // If unavailable, leave the original sprite untouched.
+            if (!_proto.TryIndex<ShaderPrototype>("AspisWheatLowerFade", out var shaderPrototype))
+            {
+                Restore(uid, sprite);
+                continue;
+            }
             _current.Add(uid);
             if (_faded.Add(uid))
             {
-                var shader = _proto.Index<ShaderPrototype>("AspisWheatLowerFade").Instance();
+                var shader = shaderPrototype.Instance();
                 _sprites.SetPostShader((uid, sprite),
                     new SpriteComponent.PostShaderArgs(ShaderId, shader));
             }
