@@ -96,6 +96,17 @@ public abstract partial class SharedBiomeSystem : EntitySystem
             return true;
         }
 
+        // Aspis: generate wheat, connected roads and clearings directly as
+        // streamed biome tiles rather than thousands of crop entities.
+        if (Content.Shared._Aspis.Organizations.AspisWheatTerrain.AppliesTo(layers) &&
+            TileDefManager.TryGetDefinition(
+                Content.Shared._Aspis.Organizations.AspisWheatTerrain.GetFloor(indices.X, indices.Y),
+                out var aspWheatTile))
+        {
+            tile = new Tile(aspWheatTile.TileId);
+            return true;
+        }
+
         return TryGetTile(indices, layers, seed, grid, out tile);
     }
 
