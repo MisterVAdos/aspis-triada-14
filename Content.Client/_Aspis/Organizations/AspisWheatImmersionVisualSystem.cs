@@ -40,7 +40,21 @@ public sealed class AspisWheatImmersionVisualSystem : EntitySystem
             return;
         _elapsed = 0f;
         _current.Clear();
-        var wheatId = _tiles["FloorAspisWheat"].TileId;
+        // The wheat tile is provided by the planet resources, which may not be
+        // installed in minimal/test content packs. Never crash the client on
+        // ordinary maps when that optional tile is absent.
+        if (!_tiles.TryGetDefinition("FloorAspisWheat", out var wheatTile))
+        {
+            foreach (var uid in new List<EntityUid>(_faded))
+            {
+                if (TryComp<SpriteComponent>(uid, out var sprite))
+                    Restore(uid, sprite);
+                else
+                    _faded.Remove(uid);
+            }
+            return;
+        }
+        var wheatId = wheatTile.TileId;
         var query = EntityQueryEnumerator<HumanoidAppearanceComponent, SpriteComponent, TransformComponent>();
         while (query.MoveNext(out var uid, out _, out var sprite, out var xform))
         {
