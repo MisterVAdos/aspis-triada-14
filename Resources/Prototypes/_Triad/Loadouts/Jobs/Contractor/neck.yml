@@ -1,5 +1,0 @@
-- type: loadout
-  id: ClothingNeckScarfPilot
-  groupBy: Scarf
-  equipment:
-    neck: ClothingNeckScarfPilot

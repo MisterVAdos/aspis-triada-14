@@ -1,9 +1,0 @@
-- type: loadout
-  id: TdfBalaclava
-  equipment:
-    balaclava: ClothingBalaclavaSkiMaskBlack
-
-- type: loadout
-  id: TdfBalaclavaAlt
-  equipment:
-    balaclava: ClothingBalaclavaSkiMaskGray
