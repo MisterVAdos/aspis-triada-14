@@ -1,5 +1,0 @@
-# Stores contraband permit data
-- type: sectorService
-  id: ContrabandPermits
-  components:
-  - type: SectorContrabandPermits

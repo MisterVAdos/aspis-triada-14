@@ -1,6 +1,0 @@
-- type: statusEffect
-  id: CorticalBorerProtection
-  alwaysAllowed: true
-
-- type: statusEffect
-  id: ClawsGrowthSuppression

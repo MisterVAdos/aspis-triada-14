@@ -1,7 +1,0 @@
-- type: entity
-  parent: LockableButton
-  id: LockableButtonSolarian
-  suffix: Solarian
-  components:
-  - type: AccessReader
-    access: [["Solarian"]]

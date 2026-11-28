@@ -1,8 +1,0 @@
-- type: loadout
-  id: HighTops
-  effects:
-  - !type:GroupLoadoutEffect
-    proto: ShoesCapableNF
-  groupBy: PerformerShoes
-  equipment:
-   shoes: ClothingShoesHighTops
