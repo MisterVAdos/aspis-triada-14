@@ -1,4 +1,0 @@
-- type: entity
-  parent: [WeaponLoadoutRegisteredBase, WeaponSubMachineGunSquire]
-  id: WeaponSubMachineGunSquireRegistered
-  suffix: Registered
