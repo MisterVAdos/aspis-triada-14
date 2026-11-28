@@ -37,12 +37,21 @@ public sealed partial class CargoSystem
             // Don't EntityQuery for it as it's not required.
             TryComp<AppearanceComponent>(uid, out var appearance);
 
+            // A power/anchor event alone is insufficient: never consume a shipment
+            // on an unpowered or unanchored pad, and resume after power is restored.
+            if (!TryComp<ApcPowerReceiverComponent>(uid, out var receiver) ||
+                !receiver.Powered || !Transform(uid).Anchored)
+            {
+                comp.CurrentState = CargoTelepadState.Unpowered;
+                _appearance.SetData(uid, CargoTelepadVisuals.State, CargoTelepadState.Unpowered, appearance);
+                comp.Accumulator = comp.Delay;
+                continue;
+            }
             if (comp.CurrentState == CargoTelepadState.Unpowered)
             {
                 comp.CurrentState = CargoTelepadState.Idle;
                 _appearance.SetData(uid, CargoTelepadVisuals.State, CargoTelepadState.Idle, appearance);
                 comp.Accumulator = comp.Delay;
-                continue;
             }
 
             if (!TryComp<DeviceLinkSinkComponent>(uid, out var sinkComponent))
@@ -149,7 +158,7 @@ public sealed partial class CargoSystem
         var disabled = !receiver.Powered || !xform.Anchored;
 
         // Setting idle state should be handled by Update();
-        if (disabled)
+        if (!disabled)
             return;
 
         TryComp<AppearanceComponent>(uid, out var appearance);

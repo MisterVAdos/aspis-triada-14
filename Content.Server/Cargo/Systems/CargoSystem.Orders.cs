@@ -568,26 +568,28 @@ namespace Content.Server.Cargo.Systems
             var available = database.Capacity - GetOutstandingOrderCount(database);
             // Reserve slots for currently pending cargo orders as well.
             available -= database.Orders.Where(order => !order.Approved).Sum(order => order.OrderQuantity);
-            queued = Math.Min(Math.Min(available, totalUnits - alreadyRequested), 20);
-            if (queued < 1)
-            {
-                queued = 0;
+            var firstBatch = OrganizationFrontierCargoRules.NextBatch(totalUnits - alreadyRequested, available);
+            if (firstBatch < 1)
                 return false;
-            }
+
+            // One authenticated frontier invoice reserves the complete remaining workload.
+            // Only the first physical batch enters the cargo database now.
+            queued = frontier ? totalUnits - alreadyRequested : firstBatch;
 
             var order = new CargoOrderData(GenerateOrderId(database), QuotaTradeCratePrototype,
-                "Торговий вантаж за накладною", 0, queued, requester,
-                $"{marker} Корпоративна доставка. Партія {queued} ящиків.",
+                "Торговий вантаж за накладною", 0, firstBatch, requester,
+                $"{marker} Корпоративна доставка. Ящики {alreadyRequested + 1}–{alreadyRequested + firstBatch} з {totalUnits}.",
                 EntityManager.GetNetEntity(console));
-            if (!TryAddOrder(station!.Value, order, database))
+            _quotaOrders.Add(order, new QuotaOrderAuthorization(organization, code, totalUnits, alreadyRequested,
+                (int[]) postTargets.Clone(), frontier, station!.Value));
+            if (!TryAddOrder(station.Value, order, database))
             {
+                _quotaOrders.Remove(order);
                 queued = 0;
                 return false;
             }
-            _quotaOrders.Add(order, new QuotaOrderAuthorization(organization, code, totalUnits, alreadyRequested,
-                (int[]) postTargets.Clone(), frontier, station!.Value));
             _adminLogger.Add(LogType.Action, LogImpact.Low,
-                $"Organization quota cargo request queued: {marker}, quantity={queued}, computer={console}");
+                $"Organization quota cargo request queued: {marker}, authorized={queued}, batch={firstBatch}, computer={console}");
             return true;
         }
 
@@ -626,6 +628,17 @@ namespace Content.Server.Cargo.Systems
         private bool PopFrontOrder(List<NetEntity> consoleUidList, StationCargoOrderDatabaseComponent orderDB,
             EntityUid? originGrid, [NotNullWhen(true)] out CargoOrderData? orderOut)
         {
+            // Expired route orders must not occupy the shared cargo capacity forever.
+            for (var i = orderDB.Orders.Count - 1; i >= 0; i--)
+            {
+                var pending = orderDB.Orders[i];
+                if (_quotaOrders.TryGetValue(pending, out var authorization) &&
+                    authorization.Frontier && !IsActiveFrontierAuthorization(authorization))
+                {
+                    orderDB.Orders.RemoveAt(i);
+                    _quotaOrders.Remove(pending);
+                }
+            }
             var orderIdx = orderDB.Orders.FindIndex(order => order.Approved &&
                 CanDispatchQuotaOrder(order, originGrid) &&
                 consoleUidList.Any(consoleUid => consoleUid == order.Computer));
@@ -660,9 +673,43 @@ namespace Content.Server.Cargo.Systems
             if (order.NumDispatched >= order.OrderQuantity)
             {
                 orderDB.Orders.Remove(order);
-                _quotaOrders.Remove(order);
+                if (_quotaOrders.Remove(order, out var authorization) && authorization.Frontier)
+                    QueueNextFrontierBatch(orderDB, order, authorization);
             }
             return true;
+        }
+
+        private void QueueNextFrontierBatch(StationCargoOrderDatabaseComponent database, CargoOrderData completed,
+            QuotaOrderAuthorization authorization)
+        {
+            var start = authorization.Start + completed.NumDispatched;
+            if (start >= authorization.Total || !IsActiveFrontierAuthorization(authorization))
+                return;
+
+            // A completed approved batch frees at least one physical queue slot.
+            // Preserve the original approval, linked console and absolute crate index.
+            var batch = OrganizationFrontierCargoRules.NextBatch(authorization.Total - start,
+                database.Capacity - GetOutstandingOrderCount(database));
+            if (batch == 0)
+            {
+                // This cannot occur for a normally approved, in-capacity order. Retain
+                // an approved one-crate continuation only when a slot is available.
+                Logger.Error($"Frontier {authorization.Code}: no capacity after a completed batch.");
+                return;
+            }
+            var next = new CargoOrderData(GenerateOrderId(database), completed.ProductId,
+                completed.ProductName, 0, batch, completed.Requester,
+                $"[QUOTA:{authorization.Code}] Далекий рубіж. Ящики {start + 1}–{start + batch} з {authorization.Total}.",
+                completed.Computer)
+            {
+                Approved = true
+            };
+            next.SetApproverData(completed.Approver);
+            _quotaOrders.Add(next, new QuotaOrderAuthorization(authorization.Organization, authorization.Code,
+                authorization.Total, start, authorization.PostTargets, true, authorization.SourceStation));
+            database.Orders.Add(next);
+            _adminLogger.Add(LogType.Action, LogImpact.Low,
+                $"Frontier {authorization.Code}: continued batch {start + 1}–{start + batch}/{authorization.Total}.");
         }
 
         /// <summary>

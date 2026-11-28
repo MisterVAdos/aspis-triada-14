@@ -10,6 +10,7 @@ using Content.Server.Shuttles.Components;
 using Content.Server.Weather;
 using Content.Shared.Atmos.Components;
 using Content.Shared.Body.Components;
+using Content.Shared.Cargo.Components;
 using Content.Shared.Damage;
 using Content.Shared.DoAfter;
 using Content.Shared.Interaction;
@@ -74,6 +75,7 @@ public sealed class AspisAgroAftermathSystem : EntitySystem
     private static readonly TimeSpan SampleDelay = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan FloraHarvestDelay = TimeSpan.FromSeconds(2);
     private const int SamplesPerSpraying = 12;
+    private const double HarvestedFloraPrice = 25_000;
     private const float MinFloraSpacing = 5f;
     private const float ToxicTickSeconds = 1f;
     private const int MaxPlayersPerTick = 64;
@@ -431,12 +433,35 @@ public sealed class AspisAgroAftermathSystem : EntitySystem
         }
         var sample = Spawn(string.IsNullOrWhiteSpace(node.SamplePrototype) ? "AspisAgroQuarantineSample01" : node.SamplePrototype, Transform(uid).Coordinates);
         EnsureComp<AspisAgroQuarantineSampleComponent>(sample).ClaimCode = claim;
+        // Set the real sale price on authenticated harvested items. Do not
+        // overwrite user-edited names/descriptions in the plant YAML prototypes.
+        EnsureComp<StaticPriceComponent>(sample).Price = HarvestedFloraPrice;
+        ClearHarvestedFloraTile(uid, node.SurfaceMap);
         var pickedUp = _hands.TryPickupAnyHand(actor, sample);
         QueueDel(uid);
         _popup.PopupEntity(pickedUp
                 ? "Диворослину зібрано! Продайте зразок через Cargo."
                 : "Диворослину вирвано. Звільніть руку, щоб підібрати зразок.",
             actor, actor);
+    }
+
+    private void ClearHarvestedFloraTile(EntityUid node, EntityUid map)
+    {
+        if (!TryComp<MapGridComponent>(map, out var grid) || !TryComp<BiomeComponent>(map, out var biome))
+            return;
+        var position = Transform(node).WorldPosition;
+        var cell = new Vector2i((int)MathF.Floor(position.X), (int)MathF.Floor(position.Y));
+        if (!_floraCells.TryGetValue(map, out var usedCells))
+            _floraCells[map] = usedCells = new HashSet<Vector2i>();
+        usedCells.Add(cell);
+        // Persist the bare tile across normal biome chunk unload/reload, just
+        // like the existing permanent shuttle landing clearance.
+        if (!_maps.TryGetTileRef(map, grid, cell, out var tile) ||
+            tile.Tile.TypeId != _tiles["FloorAspisWheat"].TileId)
+            return;
+        var chunk = SharedMapSystem.GetChunkIndices(cell, 8) * 8;
+        biome.ModifiedTiles.GetOrNew(chunk).Add(cell);
+        _maps.SetTiles(map, grid, new List<(Vector2i, Tile)> { (cell, new Tile(_tiles["FloorDesert"].TileId)) });
     }
 
     /// <summary>

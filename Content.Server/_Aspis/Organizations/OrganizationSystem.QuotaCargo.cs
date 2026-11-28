@@ -72,7 +72,9 @@ public sealed partial class OrganizationSystem
             _quotaPaper.SetContent((printed, paper),
                 $"НАКЛАДНА НА ВАНТАЖ\nНомер: {claim.Code}\nОрганізація: {org.Name}\nЯщиків: {claim.Units}\n" +
                 (workflow == OrganizationQuotaWorkflow.CargoDelivery
-                    ? "Вставте накладну в консоль Cargo Requests. Документ одноразовий."
+                    ? (claim.Scenario.Id == FrontierScenarioId
+                        ? "Вставте накладну в Cargo Requests та схваліть першу партію. Решта ящиків надійде автоматично партіями до 20."
+                        : "Вставте накладну в консоль Cargo Requests. Документ одноразовий.")
                     : "Прикріпіть накладну до вантажного ящика. Вміст перевіряється при продажу через Cargo."));
 
         _quotaManifestPrintCooldowns[character] = _gameTiming.CurTime;
@@ -161,7 +163,9 @@ public sealed partial class OrganizationSystem
         _adminLog.Add(LogType.Action, LogImpact.Low,
             $"Quota manifest inserted: code={claim.Code}, user={character.UserId}, crates={queued}");
         _audio.PlayPvs(MoneyConfirmSound, console);
-        _quotaPopup.PopupEntity($"Накладну {claim.Code} прийнято. Заявка на {queued} ящиків додана до Requests.",
+        _quotaPopup.PopupEntity(claim.Scenario.Id == FrontierScenarioId
+                ? $"Накладну {claim.Code} прийнято: {queued} ящиків. Схваліть першу партію в Requests; решта надійде автоматично."
+                : $"Накладну {claim.Code} прийнято. Заявка на {queued} ящиків додана до Requests.",
             args.User, args.User);
         QueueDel(args.Used);
     }

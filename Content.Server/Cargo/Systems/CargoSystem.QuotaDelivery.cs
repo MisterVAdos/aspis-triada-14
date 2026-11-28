@@ -45,6 +45,10 @@ public sealed partial class CargoSystem
         string.Equals(name, "Auric Trade Mall", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(name, "Trade Mall", StringComparison.OrdinalIgnoreCase);
 
+    private bool IsActiveFrontierAuthorization(QuotaOrderAuthorization authorization) =>
+        EntityManager.System<OrganizationSystem>().IsActiveFrontierCargoOrder(authorization.Organization,
+            authorization.Code, authorization.Total);
+
     private bool CanDispatchQuotaOrder(CargoOrderData order, EntityUid? grid)
     {
         if (!_quotaOrders.TryGetValue(order, out var auth))
@@ -54,7 +58,7 @@ public sealed partial class CargoSystem
         // as the issuing Cargo Requests console, not a mutable grid name.
         return grid is { Valid: true } id && !Deleted(id) &&
                _station.GetOwningStation(id) == auth.SourceStation &&
-               (auth.Frontier || TryGetQuotaTradeDestination(3, out _));
+               (auth.Frontier ? IsActiveFrontierAuthorization(auth) : TryGetQuotaTradeDestination(3, out _));
     }
 
     private void ResetQuotaDeliveryRound() => _quotaOrders.Clear();
@@ -96,7 +100,7 @@ public sealed partial class CargoSystem
     {
         if (!_quotaOrders.TryGetValue(order, out var authorization))
             return true;
-        if (order.NumDispatched is < 1 or > 40)
+        if (order.NumDispatched < 1 || order.NumDispatched > order.OrderQuantity)
             return false;
 
         // PopFrontOrder increments NumDispatched before FulfillOrder is called.
