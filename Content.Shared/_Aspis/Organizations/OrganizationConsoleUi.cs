@@ -200,6 +200,12 @@ public sealed class OrganizationEntry(
     public OrganizationFactionFocus[] FactionFoci = [];
     public bool IsPrivate = isPrivate;
     public bool RosterPublic = true;
+    public bool InvestorsPublic;
+    public long ExternalInvestmentTotal;
+    public int ExternalInvestorCount;
+    public bool InvestorListVisible;
+    public OrganizationInvestorEntry[] ExternalInvestors = [];
+    public int InvestmentDemandPercent;
     public int EntryFee = entryFee;
     public string Color = color;
     public int Members = members;
@@ -283,7 +289,7 @@ public sealed class OrganizationCastVoteMessage(Guid organization, Guid vote, bo
 }
 
 [Serializable, NetSerializable]
-public enum OrganizationStockOrder : byte { Buy, Sell, Issue }
+public enum OrganizationStockOrder : byte { Buy, Sell, Issue, ExternalInvestment }
 
 [Serializable, NetSerializable]
 public sealed class OrganizationStockEntry(Guid id, string name, string color, int quote,
@@ -321,6 +327,11 @@ public sealed class OrganizationTradeAlertEntry(DateTime utc, string company, st
     public bool Flagged = flagged;
     // Stable server-supplied key for flagged evidence only; never trust it as an authorization token.
     public string SourceKey = string.Empty;
+    public string Operation = string.Empty;
+    public string Reason = string.Empty;
+    public string Counterparty = string.Empty;
+    public long Amount;
+    public int Quantity;
 }
 
 [Serializable, NetSerializable]
@@ -523,6 +534,8 @@ public sealed class OrganizationConsoleState(
     public bool CanClaimLeadership;
     public int OnlineMembers;
     public OrganizationOperatingPolicy OperatingPolicy;
+    public OrganizationMarketProgram MarketProgram;
+    public int MarketProgramCycles;
     public OrganizationPermission UserPermissions;
     public OrganizationPermission DeputyPermissions;
     public OrganizationPermission OfficerPermissions;
@@ -640,6 +653,7 @@ public sealed class OrganizationCreateMessage(
     public string Color = color;
     public int Investment = investment;
     public bool RosterPublic = true;
+    public bool InvestorsPublic;
     public int Marketing = marketing;
     public int Logistics = logistics;
     public int Security = security;
@@ -1499,4 +1513,18 @@ public static class OrganizationFleetRules
     public const int MinimumRentalPrice = 1_000;
     public const int MaximumRentalPrice = 20_000;
     public const int MaximumSimultaneousRentals = 8;
+}
+
+[Serializable, NetSerializable]
+public sealed class OrganizationInvestorEntry(string name, long amount)
+{
+    public string Name = name;
+    public long Amount = amount;
+}
+
+[Serializable, NetSerializable]
+public sealed class OrganizationExternalInvestmentMessage(Guid organization, int amount) : BoundUserInterfaceMessage
+{
+    public Guid Organization = organization;
+    public int Amount = amount;
 }

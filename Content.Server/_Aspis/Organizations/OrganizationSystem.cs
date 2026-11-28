@@ -100,7 +100,6 @@ public sealed partial class OrganizationSystem : EntitySystem
     private const long MaxTreasury = 1_000_000_000;
     private const int MarketCapacityBp = 10_000;
     private const int PeacefulExpansionBp = 1_800;
-    private const int MaxInvestment = 100_000;
     private const int DailySectorDemand = 160_000;
     private const int DailyCompanyRevenueLimit = 24_000;
     private const int MinWorkingCapital = 200;
@@ -242,6 +241,8 @@ public sealed partial class OrganizationSystem : EntitySystem
         public bool IsPrivate = isPrivate;
         public bool PrivateAccessPurchased = isPrivate;
         public bool RosterPublic = true;
+        public bool InvestorsPublic;
+        public List<OrganizationExternalInvestorRecord> ExternalInvestors = new();
         public int PayrollPerMember;
         public bool PayrollAutomatic;
         public int PayrollProfitPercent = 30;
@@ -308,6 +309,8 @@ public sealed partial class OrganizationSystem : EntitySystem
         public int CompanyLevel = 1;
         public int CompanyExperience;
         public OrganizationOperatingPolicy OperatingPolicy = OrganizationOperatingPolicy.Balanced;
+        public OrganizationMarketProgram MarketProgram;
+        public int MarketProgramCycles;
         public int LastCycleGross;
         public int LastCycleCosts;
         public int LastCycleNet;
@@ -434,6 +437,7 @@ public sealed partial class OrganizationSystem : EntitySystem
             subs.Event<OrganizationOutpostConfiguratorSelectSlotMessage>(OnAdvancedConfiguratorSelect);
         });
         SubscribeLocalEvent<OrganizationPropertyAccessReaderComponent, OrganizationPropertyAccessCheckEvent>(OnOrganizationPropertyReaderCheck);
+        SubscribeLocalEvent<Content.Shared._Triad.Shipyard.Save.ShipyardShuttleLoadEvent>(OnCorporateSavedShipLoaded);
         SubscribeLocalEvent<AccessReaderComponent, InteractUsingEvent>(OnOrganizationPropertyReaderConfigured);
         SubscribeLocalEvent<OrganizationOutpostConfiguratorComponent,
             Content.Shared.Interaction.InteractHandEvent>(OnOutpostConfiguratorCycle);
@@ -444,6 +448,7 @@ public sealed partial class OrganizationSystem : EntitySystem
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationConfigureMessage>(OnConfigure);
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationLeaveMessage>(OnLeave);
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationTreasuryMessage>(OnTreasury);
+        SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationExternalInvestmentMessage>(OnExternalInvestment);
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationInvestMessage>(OnInvest);
         // Legacy open-ended delivery disabled: all manual contract deliveries use sector quotas.
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationClaimQuotaMessage>(OnClaimQuota);
@@ -459,6 +464,8 @@ public sealed partial class OrganizationSystem : EntitySystem
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationAssignCustomRoleMessage>(OnAssignCustomRole);
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationDevelopmentMessage>(OnDevelopment);
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationSetOperatingPolicyMessage>(OnSetOperatingPolicy);
+        SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationMarketProgramMessage>(OnMarketProgram);
+        SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationInvestorPrivacyMessage>(OnInvestorPrivacy);
         SubscribeLocalEvent<Content.Server.Advertise.Components.AdvertiseComponent, Content.Server.Advertise.EntitySystems.AttemptAdvertiseEvent>(OnAttemptAdvertisement);
         SubscribeLocalEvent<OrganizationOwnerBindingComponent, MobStateChangedEvent>(OnOwnerMobState);
         SubscribeLocalEvent<OrganizationConsoleComponent, OrganizationSetPermissionsMessage>(OnSetPermissions);
@@ -817,7 +824,7 @@ public sealed partial class OrganizationSystem : EntitySystem
                     0.024 * (org.InfrastructureLevel + org.InfrastructureTier2Level) +
                     0.026 * (org.ServiceNetworkLevel + org.ServiceNetworkTier2Level)) *
                 (1.0 + 0.025 * (org.CompanyLevel - 1)) * policyReach * crisis /
-                competition * marketWaves[org.Industry]);
+                competition * marketWaves[org.Industry] * OrganizationMarketProgramRules.DemandMultiplier(org.MarketProgram));
             weightTotal += weights[i];
         }
 
@@ -869,6 +876,7 @@ public sealed partial class OrganizationSystem : EntitySystem
             if (gross > costs && org.QuotaBonusCycles > 0 && org.QuotaIncomeBonusPercent > 0)
                 costs = Math.Max(0, costs - Math.Min(costs,
                     (gross - costs) * org.QuotaIncomeBonusPercent / 100));
+            costs += OrganizationMarketProgramRules.ExtraCost(org.MarketProgram, gross);
             var net = gross - costs;
             if (net > 0 && org.Treasury > MaxTreasury - net)
             {
@@ -913,6 +921,9 @@ public sealed partial class OrganizationSystem : EntitySystem
                     continue;
                 var org = companies[i];
                 var cost = costAmounts[i];
+                RecordPassiveMarketReview(org, companies, grossAmounts, i, gross, cost, assignedDemand, nowUtc);
+                if (org.MarketProgramCycles > 0 && --org.MarketProgramCycles == 0)
+                    org.MarketProgram = OrganizationMarketProgram.None;
                 var previousRevenue = CompanyRevenueInWindow(org);
                 org.SalesDateUtc = today;
                 org.DailyGrossRevenue = previousRevenue + gross;
@@ -952,6 +963,7 @@ public sealed partial class OrganizationSystem : EntitySystem
         }))
             return;
 
+        NotifyPassiveMarketReviews(nowUtc);
         foreach (var company in _organizations.Values.Where(o => o.Kind == OrganizationKind.Company))
             CheckConcentration(company);
 
@@ -1273,7 +1285,8 @@ public sealed partial class OrganizationSystem : EntitySystem
             }).ToList(),
             ConcentrationAlerts = _concentrationAlerts.Select(a => new OrganizationConcentrationRecord
             {
-                Utc = a.Utc, Organization = a.Organization, Company = a.Company, Reason = a.Reason
+                Utc = a.Utc, Organization = a.Organization, Company = a.Company, Reason = a.Reason,
+                Operation = a.Operation, Gross = a.Gross
             }).ToList(),
             TdfCases = _tdfCases.Select(c => new OrganizationTdfCaseRecord
             {
@@ -1321,6 +1334,9 @@ public sealed partial class OrganizationSystem : EntitySystem
                 IsPrivate = org.IsPrivate,
                 PrivateAccessPurchased = org.PrivateAccessPurchased,
                 RosterPublic = org.RosterPublic,
+                InvestorsPublic = org.InvestorsPublic,
+                ExternalInvestors = org.ExternalInvestors.Select(i => new OrganizationExternalInvestorRecord
+                { UserId = i.UserId, Slot = i.Slot, Name = i.Name, Amount = i.Amount }).ToList(),
                 PayrollPerMember = org.PayrollPerMember,
                 PayrollAutomatic = org.PayrollAutomatic,
                 PayrollProfitPercent = org.PayrollProfitPercent,
@@ -1394,6 +1410,8 @@ public sealed partial class OrganizationSystem : EntitySystem
                 CompanyLevel = org.CompanyLevel,
                 CompanyExperience = org.CompanyExperience,
                 OperatingPolicy = org.OperatingPolicy,
+                MarketProgram = org.MarketProgram,
+                MarketProgramCycles = org.MarketProgramCycles,
                 LastCycleGross = org.LastCycleGross,
                 LastCycleCosts = org.LastCycleCosts,
                 LastCycleNet = org.LastCycleNet,
@@ -1521,7 +1539,7 @@ public sealed partial class OrganizationSystem : EntitySystem
                 data.SectorInfluenceBp is < 0 or > MarketCapacityBp ||
                 data.IndustryInfluenceBp is < 0 or > MarketCapacityBp ||
                 (data.Kind == OrganizationKind.Faction && data.IndustryInfluenceBp != 0) ||
-                data.CapitalSpent < 0 || data.GrossRevenue < 0 || data.OperatingCosts < 0 ||
+                !ValidExternalInvestors(data.ExternalInvestors) || data.CapitalSpent < 0 || data.GrossRevenue < 0 || data.OperatingCosts < 0 ||
                 data.DailyGrossRevenue is < 0 or > DailyCompanyRevenueLimit ||
                 data.EntryFee is < 0 or > MaxEntryFee || data.Treasury is < 0 or > MaxTreasury ||
                 data.InitialInvestment is < 0 or > MaxInitialInvestment || !ValidShares(data.BudgetShares) ||
@@ -1552,6 +1570,8 @@ public sealed partial class OrganizationSystem : EntitySystem
                     p.Paid < 0 || (p.Pending == 0) != (p.PendingTransferId == Guid.Empty)) ||
                 data.PayrollAccounts.Select(p => (p.UserId, p.Slot)).Distinct().Count() != data.PayrollAccounts.Count ||
                 !Enum.IsDefined(data.OperatingPolicy) ||
+                !OrganizationMarketProgramRules.Valid(data.MarketProgram, data.MarketProgramCycles) ||
+                (data.Kind != OrganizationKind.Company && data.MarketProgram != OrganizationMarketProgram.None) ||
                 !ValidPermissions(data.DeputyPermissions) || !ValidPermissions(data.OfficerPermissions) || !ValidPermissions(data.MemberPermissions) ||
                 data.LastCycleGross is < 0 or > DailyCompanyRevenueLimit ||
                 data.LastCycleCosts is < 0 or > 20_000 ||
@@ -1626,6 +1646,8 @@ public sealed partial class OrganizationSystem : EntitySystem
                 data.IsPrivate, data.EntryFee, color)
             {
                 RosterPublic = data.RosterPublic,
+                InvestorsPublic = data.InvestorsPublic,
+                ExternalInvestors = data.ExternalInvestors ?? new(),
                 // A private organization created before this version already paid at registration.
                 PrivateAccessPurchased = data.PrivateAccessPurchased || data.IsPrivate,
                 FactionFocus = data.Kind == OrganizationKind.Faction && Enum.IsDefined(data.FactionFocus)
@@ -1713,6 +1735,8 @@ public sealed partial class OrganizationSystem : EntitySystem
                 CompanyLevel = Math.Clamp(data.CompanyLevel, 1, MaxCompanyLevel),
                 CompanyExperience = Math.Clamp(data.CompanyExperience, 0, 1_000_000),
                 OperatingPolicy = data.OperatingPolicy,
+                MarketProgram = data.MarketProgram,
+                MarketProgramCycles = data.MarketProgramCycles,
                 LastCycleGross = data.LastCycleGross,
                 LastCycleCosts = data.LastCycleCosts,
                 LastCycleNet = data.LastCycleNet,
@@ -2049,6 +2073,7 @@ public sealed partial class OrganizationSystem : EntitySystem
             Treasury = args.Investment,
             BudgetShares = shares,
             RosterPublic = args.RosterPublic,
+            InvestorsPublic = args.InvestorsPublic,
             FactionFocus = args.Kind == OrganizationKind.Faction ? args.FactionFoci[0] : OrganizationFactionFocus.None,
             FactionFoci = args.Kind == OrganizationKind.Faction
                 ? (OrganizationFactionFocus[])args.FactionFoci.Clone() : [],
@@ -2688,6 +2713,7 @@ public sealed partial class OrganizationSystem : EntitySystem
         var identity = Key(args.Player.UserId.ToString(), prefs.SelectedCharacterIndex, args.Profile.Name);
         _identityByBody[args.Mob] = identity;
         _displayNameByBody[args.Mob] = args.Profile.Name;
+        _investmentPlaytime.QueueRefreshTrackers(args.Player);
         if (TryTdfRankFromJob(args.JobId, out var rank, out var grade))
             _tdfRankByBody[args.Mob] = (rank, grade);
         TrackTdfDuty(args.Mob, identity);
@@ -2912,8 +2938,7 @@ public sealed partial class OrganizationSystem : EntitySystem
             return;
         }
         if (!Enum.IsDefined(args.Scope) || !Enum.IsDefined(args.Focus) ||
-            args.Amount is < 100 or > MaxInvestment ||
-            (args.Scope == OrganizationMarketScope.Industry && organization.Kind != OrganizationKind.Company))
+            args.Amount < 100 || organization.Kind != OrganizationKind.Company)
         {
             Refresh(uid, actor, "Некоректні параметри інвестиції.");
             return;
@@ -2944,31 +2969,19 @@ public sealed partial class OrganizationSystem : EntitySystem
         var occupied = market.Sum(o => InfluenceBp(o, args.Scope));
         var free = Math.Max(0, MarketCapacityBp - occupied);
 
-        var cost = (int) Math.Min(10_000L, 100L + owned / 16 + (long) owned * owned / 40_000);
-        var budgetBonus = 75 + organization.BudgetShares[(int) args.Focus];
-        var creditPerPoint = Math.Max(1, (cost * 100 + budgetBonus - 1) / budgetBonus);
-        var creditPerOpenPoint = creditPerPoint * 2;
-        // Competition is represented through demand, costs and free market capacity.
-        // A player's investment must never directly subtract another organization's share.
+        // Competition is represented through free capacity, not direct displacement.
         if (args.Target != null)
         {
             Refresh(uid, actor, "Пряме витіснення конкурентів більше не підтримується.");
             return;
         }
-        var maxPoints = Math.Min(80, args.Amount / creditPerPoint);
-        var peaceful = Math.Min(Math.Min(maxPoints, free), Math.Max(0, PeacefulExpansionBp - owned));
-        var creditsLeft = args.Amount - peaceful * creditPerPoint;
-        var open = owned + peaceful >= PeacefulExpansionBp
-            ? Math.Min(Math.Min(maxPoints - peaceful, Math.Max(0, free - peaceful)),
-                creditsLeft / creditPerOpenPoint)
-            : 0;
-        var gained = peaceful + open;
+        var (gained, spent) = OrganizationInvestmentPricing.Calculate(
+            args.Scope, owned, free, organization.BudgetShares[(int) args.Focus], args.Amount);
         if (gained <= 0)
         {
-            Refresh(uid, actor, "Вільної частки ринку немає. Розвивайте виробництво або інвестуйте в інший напрям.");
+            Refresh(uid, actor, "Недостатньо коштів для наступного пункту впливу або вільної частки ринку немає.");
             return;
         }
-        var spent = peaceful * creditPerPoint + open * creditPerOpenPoint;
         if (!Commit(() =>
         {
             organization.Treasury -= spent;
@@ -3020,7 +3033,7 @@ public sealed partial class OrganizationSystem : EntitySystem
     {
         if (org.Kind != OrganizationKind.Company || !_store.Available ||
             (org.SectorInfluenceBp < 3500 && org.IndustryInfluenceBp < 5000) ||
-            _concentrationAlerts.Any(a => a.Organization == org.Id &&
+            _concentrationAlerts.Any(a => a.Organization == org.Id && string.IsNullOrEmpty(a.Operation) &&
                 a.Utc > DateTime.UtcNow - TimeSpan.FromHours(24)))
             return;
         var reason = $"Концентрація ринку: сектор {org.SectorInfluenceBp / 100f:0.0}%, " +
@@ -3281,8 +3294,8 @@ public sealed partial class OrganizationSystem : EntitySystem
     }
 
     private static int InitialQuote(Organization org) => Math.Clamp(
-        75 + org.CompanyLevel * 20 + org.SectorInfluenceBp / 25 + org.IndustryInfluenceBp / 25,
-        40, MaxQuote);
+        (int)((75L + org.CompanyLevel * 20L + org.SectorInfluenceBp / 25 + org.IndustryInfluenceBp / 25)
+            * (100 + InvestmentDemandPercent(org)) / 100), 40, MaxQuote);
 
     // One economic cycle creates a single durable allocation. Equity held by the
     // corporate reserve earns nothing; rounding residuals remain in the treasury.
@@ -3430,7 +3443,10 @@ public sealed partial class OrganizationSystem : EntitySystem
         if (!AuthorizedBusiness(uid, actor) || !TryGetCharacter(actor, out var key, out var name) ||
             !_organizations.TryGetValue(args.Organization, out var org) ||
             org.Kind != OrganizationKind.Company || !_store.Available ||
-            IsTradingSuspended(org) || !Enum.IsDefined(args.Order) || args.Quantity is < 1 or > MaxTradeQuantity)
+            IsTradingSuspended(org) || args.Order is not (OrganizationStockOrder.Buy or OrganizationStockOrder.Sell or OrganizationStockOrder.Issue) || args.Quantity is < 1 or > MaxTradeQuantity)
+            return;
+
+        if (args.Order == OrganizationStockOrder.Buy && !RequireInvestmentPlaytime(uid, actor))
             return;
 
         var holderKey = (key.UserId, key.Slot);
@@ -3486,6 +3502,7 @@ public sealed partial class OrganizationSystem : EntitySystem
         // Aggregate successive small orders and reversals, not just one huge sale.
         var recentTrades = _tradeLedger.Where(t => t.Organization == org.Id &&
             t.TraderUserId == key.UserId && t.TraderSlot == key.Slot &&
+            t.Order != OrganizationStockOrder.ExternalInvestment &&
             t.Utc > DateTime.UtcNow - TimeSpan.FromMinutes(10)).ToArray();
         var combinedQuantity = quantity + recentTrades.Sum(t => (long) t.Quantity);
         var combinedValue = total + recentTrades.Sum(t => t.Total);
@@ -3494,8 +3511,9 @@ public sealed partial class OrganizationSystem : EntitySystem
         // A market alert indicates *review required*, never automatic guilt.
         var flagged = quantity * 100L >= oldIssued * 5L || total >= 5_000 ||
             combinedQuantity * 100L >= oldIssued * 10L || combinedValue >= 10_000 || reversal;
-        var reason = flagged ? reversal ? "Швидка зміна напрямку торгів" :
-            "Значний разовий або сукупний обсяг за 10 хвилин" : string.Empty;
+        var reason = flagged ? reversal ? "II — Різкий розворот торгів (перевірка можливого штучного розгону ціни)" :
+            args.Order == OrganizationStockOrder.Issue ? "II — Значне розмивання часток (випуск акцій)" :
+            "I — Незвичний разовий або сукупний обсяг торгів" : string.Empty;
         var entry = new OrganizationTradeRecord
         {
             Utc = DateTime.UtcNow, Organization = org.Id, Company = org.Name,
@@ -3630,6 +3648,14 @@ public sealed partial class OrganizationSystem : EntitySystem
                 o.IndustryInfluenceBp / 100f, o.CapitalSpent, o.CrisisActive)
             {
                 RosterPublic = o.RosterPublic,
+                InvestorsPublic = o.InvestorsPublic,
+                ExternalInvestmentTotal = TotalExternalInvestment(o),
+                ExternalInvestorCount = o.ExternalInvestors.Count,
+                InvestorListVisible = CanViewInvestmentList(o, actor, console, key, canOperate),
+                InvestmentDemandPercent = InvestmentDemandPercent(o),
+                ExternalInvestors = CanViewInvestmentList(o, actor, console, key, canOperate)
+                    ? o.ExternalInvestors.OrderByDescending(i => i.Amount).Select(i => new OrganizationInvestorEntry(i.Name, i.Amount)).ToArray()
+                    : [],
                 FactionFocus = o.FactionFocus,
                 FactionFoci = (OrganizationFactionFocus[])o.FactionFoci.Clone(),
                 InsolvencyState = o.InsolvencyState,
@@ -3652,7 +3678,12 @@ public sealed partial class OrganizationSystem : EntitySystem
             TdfAuthorityId, "TDF — служба контролю сектора", "Сектор", OrganizationKind.Faction,
             OrganizationIndustry.None, true, 0, "#D6AD67", tdfMembers.Length, false,
             TdfSectorMandatePercent + (_tdfOperationalBp + _tdfLongTermBp) / 100f,
-            0f, 0, false)];
+            0f, 0, false)
+        {
+            FactionFocus = OrganizationFactionFocus.Defense,
+            FactionFoci = [OrganizationFactionFocus.Defense, OrganizationFactionFocus.Security],
+            Description = "Після Мережного Шторму захист віддалених секторів перейшов до незалежних організацій за системою Грантового Захисту. Корпоративні війни та поява Моноліту змусили Федерацію повернути свої сили до Фронтиру. Нині, під владою Ради Сол, TDF забезпечує порядок у секторі, охороняє його інфраструктуру та здійснює нагляд за діяльністю корпорацій. На службі TDF лежить захист територій від залишків сил Паетонів і повстанських угрупувань, а також контроль за дотриманням антимонопольного законодавства."
+        }];
         var members = (canOperate ? management : null)?.Members.Values.OrderByDescending(m => m.Role).ThenBy(m => m.Name)
             .Select(m => new OrganizationMemberEntry(m.Id, m.Name, m.Role,
                 IsMemberPresent(m.Key), management!.DeputyMemberId == m.Id, MemberTitle(management!, m), m.Distinction)
@@ -3757,6 +3788,8 @@ public sealed partial class OrganizationSystem : EntitySystem
             OnlineMembers = onTdfDuty ? tdfInSector :
                 management?.Members.Values.Count(m => IsMemberPresent(m.Key)) ?? 0,
             OperatingPolicy = membership?.OperatingPolicy ?? OrganizationOperatingPolicy.Balanced,
+            MarketProgram = membership?.MarketProgram ?? OrganizationMarketProgram.None,
+            MarketProgramCycles = membership?.MarketProgramCycles ?? 0,
             LastCycleGross = membership?.LastCycleGross ?? 0,
             LastCycleCosts = membership?.LastCycleCosts ?? 0,
             LastCycleNet = membership?.LastCycleNet ?? 0,
@@ -3888,12 +3921,24 @@ public sealed partial class OrganizationSystem : EntitySystem
             TdfAlerts = tdfAccess
                 ? _tradeLedger.TakeLast(100).Select(t =>
                     new OrganizationTradeAlertEntry(t.Utc, t.Company, t.TraderName,
-                        $"{t.Order}: {t.Quantity} акцій, {t.Total:N0} $" +
-                        (t.Flagged ? $" — ПЕРЕВІРКА: {t.Reason}" : string.Empty), t.Flagged)
-                        { SourceKey = t.Flagged ? TdfTradeSourceKey(t) : string.Empty })
+                        TdfTradeDescription(t), t.Flagged)
+                        {
+                            SourceKey = t.Flagged ? TdfTradeSourceKey(t) : string.Empty,
+                            Operation = TdfTradeOperation(t),
+                            Reason = t.Reason,
+                            Counterparty = t.CounterpartyName,
+                            Amount = t.Total,
+                            Quantity = t.Quantity
+                        })
                     .Concat(_concentrationAlerts.TakeLast(100).Select(a =>
-                        new OrganizationTradeAlertEntry(a.Utc, a.Company, "Секторна антимонопольна служба",
-                            a.Reason, true) { SourceKey = TdfConcentrationSourceKey(a) }))
+                        new OrganizationTradeAlertEntry(a.Utc, a.Company, string.IsNullOrEmpty(a.Operation) ? "Секторна антимонопольна служба" : "Автономна економіка",
+                            a.Reason, true)
+                        {
+                            SourceKey = TdfConcentrationSourceKey(a),
+                            Operation = string.IsNullOrEmpty(a.Operation) ? "Концентрація ринку" : a.Operation,
+                            Amount = a.Gross,
+                            Reason = a.Reason
+                        }))
                     .OrderByDescending(a => a.Utc).Take(100).ToArray()
                 : Array.Empty<OrganizationTradeAlertEntry>()
         };
