@@ -1,4 +1,5 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using Content.Shared._Aspis.Organizations;
+using System.Diagnostics.CodeAnalysis;
 using Content.Server._NF.Bank; // Frontier
 using Content.Server.Cargo.Components;
 using Content.Server.Labels.Components;
@@ -207,6 +208,15 @@ namespace Content.Server.Cargo.Systems
 
             if (cappedAmount != order.OrderQuantity)
             {
+                // A quota order has already reserved its full crate count. Never
+                // silently shrink it: the unprinted crates would become impossible
+                // to deliver while still counting toward the quota's requested total.
+                if (_quotaOrders.ContainsKey(order))
+                {
+                    ConsolePopup(args.Actor, "Квота: зараз не вистачає місця на всі ящики. Спробуйте пізніше.");
+                    PlayDenySound(uid, component);
+                    return;
+                }
                 order.OrderQuantity = cappedAmount;
                 ConsolePopup(args.Actor, Loc.GetString("cargo-console-snip-snip"));
                 PlayDenySound(uid, component);
@@ -336,6 +346,11 @@ namespace Content.Server.Cargo.Systems
             if (!TryGetOrderDatabase(uid, out var dbUid, out var orderDatabase, component))
                 return;
 
+            // An accepted quota reserves scarce shared work for one company.
+            // Do not allow deleting its physical shipment from the public cargo UI.
+            var requested = orderDatabase.Orders.Find(o => o.OrderId == args.OrderId);
+            if (requested != null && _quotaOrders.ContainsKey(requested))
+                return;
             RemoveOrder(dbUid!.Value, args.OrderId, orderDatabase);
         }
 
@@ -361,7 +376,8 @@ namespace Content.Server.Cargo.Systems
                 return;
             }
 
-            if (!component.AllowedGroups.Contains(product.Group))
+            if (!component.AllowedGroups.Contains(product.Group) ||
+                !OrganizationCargoCatalogRules.IsAvailable(product.ID, product.Product.Id, product.Name))
                 return;
 
             var data = GetOrderData(EntityManager.GetNetEntity(uid), args, product, GenerateOrderId(orderDatabase));
@@ -521,6 +537,62 @@ namespace Content.Server.Cargo.Systems
             return TryAddOrder(dbUid, order, component);
         }
 
+        /// <summary>
+        /// Queues a FREE, unapproved EMPTY-crate batch against an actual Cargo Requests console.
+        /// Caller must have verified a server-issued, one-use quota chip, its assignee,
+        /// and the remaining allowed crate count. The quantity is bounded by real cargo capacity.
+        /// Nothing is dispatched until an ordinary cargo worker approves it.
+        /// </summary>
+        public bool TryQueueOrganizationQuotaCrates(EntityUid console, Guid organization, string code, string requester,
+            int totalUnits, int alreadyRequested, int[] postTargets, out int queued, bool frontier = false)
+        {
+            queued = 0;
+            if (organization == Guid.Empty || code.Length is < 6 or > 48 ||
+                requester.Length is < 1 or > 100 || totalUnits is < 1 or > 80 ||
+                alreadyRequested < 0 || alreadyRequested >= totalUnits ||
+                !TryComp<CargoOrderConsoleComponent>(console, out var control) ||
+                !IsQuotaTradeMall(Transform(console).GridUid) ||
+                !TryGetOrderDatabase(console, out var station, out var database, control) ||
+                postTargets is not { Length: 4 } || postTargets.Any(n => n < 0) ||
+                postTargets.Sum() != totalUnits ||
+                !_protoMan.HasIndex<EntityPrototype>(QuotaTradeCratePrototype) ||
+                (!frontier && !TryGetQuotaTradeDestination(3, out _)))
+                return false;
+
+            // Prevent printing fresh tranches before the previous shipment is dispatched.
+            // Cargo explicitly removes fulfilled orders from its station queue.
+            var marker = $"[QUOTA:{code}]";
+            if (database.Orders.Any(order => _quotaOrders.TryGetValue(order, out var auth) && auth.Code == code))
+                return false;
+
+            var available = database.Capacity - GetOutstandingOrderCount(database);
+            // Reserve slots for currently pending cargo orders as well.
+            available -= database.Orders.Where(order => !order.Approved).Sum(order => order.OrderQuantity);
+            var firstBatch = OrganizationFrontierCargoRules.NextBatch(totalUnits - alreadyRequested, available);
+            if (firstBatch < 1)
+                return false;
+
+            // One authenticated frontier invoice reserves the complete remaining workload.
+            // Only the first physical batch enters the cargo database now.
+            queued = frontier ? totalUnits - alreadyRequested : firstBatch;
+
+            var order = new CargoOrderData(GenerateOrderId(database), QuotaTradeCratePrototype,
+                "Торговий вантаж за накладною", 0, firstBatch, requester,
+                $"{marker} Корпоративна доставка. Ящики {alreadyRequested + 1}–{alreadyRequested + firstBatch} з {totalUnits}.",
+                EntityManager.GetNetEntity(console));
+            _quotaOrders.Add(order, new QuotaOrderAuthorization(organization, code, totalUnits, alreadyRequested,
+                (int[]) postTargets.Clone(), frontier, station!.Value));
+            if (!TryAddOrder(station.Value, order, database))
+            {
+                _quotaOrders.Remove(order);
+                queued = 0;
+                return false;
+            }
+            _adminLogger.Add(LogType.Action, LogImpact.Low,
+                $"Organization quota cargo request queued: {marker}, authorized={queued}, batch={firstBatch}, computer={console}");
+            return true;
+        }
+
         private bool TryAddOrder(EntityUid dbUid, CargoOrderData data, StationCargoOrderDatabaseComponent component)
         {
             component.Orders.Add(data);
@@ -553,9 +625,23 @@ namespace Content.Server.Cargo.Systems
             component.Orders.Clear();
         }
 
-        private static bool PopFrontOrder(List<NetEntity> consoleUidList, StationCargoOrderDatabaseComponent orderDB, [NotNullWhen(true)] out CargoOrderData? orderOut)
+        private bool PopFrontOrder(List<NetEntity> consoleUidList, StationCargoOrderDatabaseComponent orderDB,
+            EntityUid? originGrid, [NotNullWhen(true)] out CargoOrderData? orderOut)
         {
-            var orderIdx = orderDB.Orders.FindIndex(order => order.Approved && consoleUidList.Any(consoleUid => consoleUid == order.Computer));
+            // Expired route orders must not occupy the shared cargo capacity forever.
+            for (var i = orderDB.Orders.Count - 1; i >= 0; i--)
+            {
+                var pending = orderDB.Orders[i];
+                if (_quotaOrders.TryGetValue(pending, out var authorization) &&
+                    authorization.Frontier && !IsActiveFrontierAuthorization(authorization))
+                {
+                    orderDB.Orders.RemoveAt(i);
+                    _quotaOrders.Remove(pending);
+                }
+            }
+            var orderIdx = orderDB.Orders.FindIndex(order => order.Approved &&
+                CanDispatchQuotaOrder(order, originGrid) &&
+                consoleUidList.Any(consoleUid => consoleUid == order.Computer));
             if (orderIdx == -1)
             {
                 orderOut = null;
@@ -565,23 +651,65 @@ namespace Content.Server.Cargo.Systems
             orderOut = orderDB.Orders[orderIdx];
             orderOut.NumDispatched++;
 
-            if (orderOut.NumDispatched >= orderOut.OrderQuantity)
-            {
-                // Order is complete. Remove from the queue.
-                orderDB.Orders.RemoveAt(orderIdx);
-            }
+            // Keep the order until a physical crate has been stamped successfully.
             return true;
         }
 
         /// <summary>
         /// Tries to fulfill the next outstanding order.
         /// </summary>
-        private bool FulfillNextOrder(List<NetEntity> consoleUidList, StationCargoOrderDatabaseComponent orderDB, EntityCoordinates spawn, string? paperProto)
+        private bool FulfillNextOrder(List<NetEntity> consoleUidList, StationCargoOrderDatabaseComponent orderDB,
+            EntityCoordinates spawn, string? paperProto, EntityUid? originGrid)
         {
-            if (!PopFrontOrder(consoleUidList, orderDB, out var order))
+            if (!PopFrontOrder(consoleUidList, orderDB, originGrid, out var order))
                 return false;
 
-            return FulfillOrder(order, spawn, paperProto);
+            if (!FulfillOrder(order, spawn, paperProto))
+            {
+                order.NumDispatched--;
+                return false;
+            }
+
+            if (order.NumDispatched >= order.OrderQuantity)
+            {
+                orderDB.Orders.Remove(order);
+                if (_quotaOrders.Remove(order, out var authorization) && authorization.Frontier)
+                    QueueNextFrontierBatch(orderDB, order, authorization);
+            }
+            return true;
+        }
+
+        private void QueueNextFrontierBatch(StationCargoOrderDatabaseComponent database, CargoOrderData completed,
+            QuotaOrderAuthorization authorization)
+        {
+            var start = authorization.Start + completed.NumDispatched;
+            if (start >= authorization.Total || !IsActiveFrontierAuthorization(authorization))
+                return;
+
+            // A completed approved batch frees at least one physical queue slot.
+            // Preserve the original approval, linked console and absolute crate index.
+            var batch = OrganizationFrontierCargoRules.NextBatch(authorization.Total - start,
+                database.Capacity - GetOutstandingOrderCount(database));
+            if (batch == 0)
+            {
+                // This cannot occur for a normally approved, in-capacity order. Retain
+                // an approved one-crate continuation only when a slot is available.
+                Logger.Error($"Frontier {authorization.Code}: no capacity after a completed batch.");
+                return;
+            }
+            var next = new CargoOrderData(GenerateOrderId(database), completed.ProductId,
+                completed.ProductName, 0, batch, completed.Requester,
+                $"[QUOTA:{authorization.Code}] Далекий рубіж. Ящики {start + 1}–{start + batch} з {authorization.Total}.",
+                completed.Computer)
+            {
+                Approved = true
+            };
+            next.SetApproverData(completed.Approver);
+            _quotaOrders.Add(next, new QuotaOrderAuthorization(authorization.Organization, authorization.Code,
+                authorization.Total, start, authorization.PostTargets, true, authorization.SourceStation));
+            database.Orders.Add(next);
+            _adminLogger.Add(LogType.Action, LogImpact.Low,
+                $"Frontier {authorization.Code}: continued batch {start + 1}–{start + batch}/{authorization.Total}.");
         }
 
         /// <summary>
@@ -591,6 +719,11 @@ namespace Content.Server.Cargo.Systems
         {
             // Create the item itself
             var item = Spawn(order.ProductId, spawn);
+            if (!StampQuotaCrate(order, item))
+            {
+                QueueDel(item);
+                return false;
+            }
 
             // Ensure the item doesn't start anchored
             _transformSystem.Unanchor(item, Transform(item));
