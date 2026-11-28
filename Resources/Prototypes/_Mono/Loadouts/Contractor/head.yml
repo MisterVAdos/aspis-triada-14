@@ -1,6 +1,0 @@
-
-- type: loadout
-  id: ContractorClothingHeadSanabi
-  groupBy: CowboyHat
-  equipment:
-    head: ClothingHeadSanabi
